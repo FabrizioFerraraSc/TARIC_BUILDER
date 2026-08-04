@@ -4,7 +4,9 @@ Userscript Tampermonkey per estrarre e organizzare la nomenclatura TARIC dal por
 
 ## Stato del progetto
 
-La versione `1.0.0` usa come base la precedente V8 e mantiene il comportamento già testato sui capitoli 01 e 02, inclusi:
+La base corrente è la V8 (`0.8.0`) già testata sui capitoli 01 e 02. Il repository è ora il progetto principale e contiene la documentazione necessaria per sviluppare le versioni successive in modo controllato.
+
+Funzioni già presenti:
 
 - navigazione automatica tra sottocapitoli e sottolivelli;
 - apertura e lettura dei dettagli nomenclatura;
@@ -23,7 +25,7 @@ La versione `1.0.0` usa come base la precedente V8 e mantiene il comportamento g
 
 ## Compatibilità dati
 
-Le chiavi `localStorage` della V8 sono mantenute temporaneamente per evitare di perdere eventuali raccolte già avviate:
+Le chiavi `localStorage` della V8 sono mantenute per evitare di perdere eventuali raccolte già avviate:
 
 - `AIDA_V8_01_02_STATE`
 - `AIDA_V8_01_02_DATA`
@@ -31,7 +33,7 @@ Le chiavi `localStorage` della V8 sono mantenute temporaneamente per evitare di 
 ## Struttura
 
 - `TARIC_BUILDER.user.js`: file principale installabile in Tampermonkey.
-- `CHANGELOG.md`: cronologia delle versioni.
+- `CHANGELOG.md`: cronologia delle modifiche pubblicate.
 - `docs/ARCHITECTURE.md`: descrizione dei componenti e della macchina a stati.
 - `docs/ROADMAP.md`: sviluppo previsto.
 
