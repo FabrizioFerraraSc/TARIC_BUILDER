@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TARIC BUILDER - Test sottocapitolo singolo
 // @namespace    fabry-aida-crawler
-// @version      0.9.0-test
+// @version      0.9.1-test
 // @description  Testa un singolo sottocapitolo TARIC a 4 cifre usando il motore stabile V8
 // @match        https://aidaonline7.adm.gov.it/*
 // @grant        none
@@ -11,28 +11,12 @@
 (function () {
     'use strict';
 
-    let ALLOWED_CHAPTERS = [];
-    let SUBCHAPTERS = [];
-    let selectedSubchapter = '';
+    const TEST_CODE_KEY = 'TARIC_BUILDER_TEST_CODE';
+    let selectedSubchapter = String(localStorage.getItem(TEST_CODE_KEY) || '0301').replace(/\D/g, '');
+    if (!/^\d{4}$/.test(selectedSubchapter)) selectedSubchapter = '0301';
 
-    function configureTestSubchapter() {
-        const detected = currentSubchapterFromPage();
-        let value = detected || localStorage.getItem('TARIC_BUILDER_TEST_CODE') || '0301';
-        value = prompt('Sottocapitolo TARIC da testare (4 cifre):', value);
-        if (value === null) return false;
-
-        value = digits(value);
-        if (!/^\d{4}$/.test(value)) {
-            alert('Inserisci un sottocapitolo TARIC di 4 cifre, ad esempio 0301.');
-            return false;
-        }
-
-        selectedSubchapter = value;
-        ALLOWED_CHAPTERS = [value.slice(0, 2)];
-        SUBCHAPTERS = [value];
-        localStorage.setItem('TARIC_BUILDER_TEST_CODE', value);
-        return true;
-    }
+    let ALLOWED_CHAPTERS = [selectedSubchapter.slice(0, 2)];
+    let SUBCHAPTERS = [selectedSubchapter];
 
     const STATE_KEY = 'TARIC_BUILDER_TEST_SINGLE_STATE';
     const DATA_KEY = 'TARIC_BUILDER_TEST_SINGLE_DATA';
@@ -903,13 +887,30 @@
         }
     }
 
+    function configureTestSubchapter() {
+        let value = currentSubchapterFromPage() || selectedSubchapter || '0301';
+        value = prompt('Sottocapitolo TARIC da testare (4 cifre):', value);
+        if (value === null) return false;
+
+        value = digits(value);
+        if (!/^\d{4}$/.test(value)) {
+            alert('Inserisci un sottocapitolo TARIC di 4 cifre, ad esempio 0301.');
+            return false;
+        }
+
+        selectedSubchapter = value;
+        ALLOWED_CHAPTERS = [value.slice(0, 2)];
+        SUBCHAPTERS = [value];
+        localStorage.setItem(TEST_CODE_KEY, value);
+        return true;
+    }
+
     function start() {
         if (state.running) return alert('Il crawler è già in esecuzione.');
         if (!configureTestSubchapter()) return;
 
-        const detected = currentSubchapterFromPage();
-        const startCode = SUBCHAPTERS.includes(detected) ? detected : SUBCHAPTERS[0];
-        const startIndex = SUBCHAPTERS.indexOf(startCode);
+        const startCode = selectedSubchapter;
+        const startIndex = 0;
 
         state = emptyState();
         data = emptyData();
@@ -980,7 +981,7 @@
         state.running = false;
         state.phase = 'completato';
         saveState();
-        alert(`Test sottocapitolo ${selectedSubchapter || state.activeSubchapter || '-'} completato. Dettagli: ${Object.keys(data.details).length}. Tabelle: ${Object.keys(data.tables).length}. Errori: ${state.errors.length}.`);
+        alert(`Test sottocapitolo ${selectedSubchapter} completato. Dettagli: ${Object.keys(data.details).length}. Tabelle: ${Object.keys(data.tables).length}. Errori: ${state.errors.length}.`);
     }
 
     function csvValue(value) {
@@ -1014,7 +1015,7 @@
                 r.validFrom, r.validTo, r.dashCount, r.supplementaryUnit, r.extractedAt
             ].map(csvValue).join(';'));
         });
-        download(`TARIC_TEST_${selectedSubchapter || state.activeSubchapter || 'XXXX'}_DETTAGLI.csv`, rows);
+        download(`TARIC_TEST_${selectedSubchapter}_DETTAGLI.csv`, rows);
     }
 
     function downloadTables() {
@@ -1029,7 +1030,7 @@
                 r.description, r.originalDescription, r.level, r.rowNumber, page.extractedAt
             ].map(csvValue).join(';')));
         });
-        download(`TARIC_TEST_${selectedSubchapter || state.activeSubchapter || 'XXXX'}_TABELLE.csv`, rows);
+        download(`TARIC_TEST_${selectedSubchapter}_TABELLE_COMPLETE.csv`, rows);
     }
 
     function reset() {
