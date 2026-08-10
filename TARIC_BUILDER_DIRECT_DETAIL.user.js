@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TARIC BUILDER V1.1 - Direct Detail Patch
+// @name         TARIC BUILDER V1.2 - Robustness Patch
 // @namespace    fabry-aida-crawler
-// @version      1.1.0
-// @description  Gestisce sottocapitoli TARIC che aprono direttamente un dettaglio (es. 0501 -> 05010000 00) senza pagina elenco.
+// @version      1.2.0
+// @description  Gestisce direct-detail e sottocapitoli presenti nell'indice ma non interrogabili direttamente dal campo a 4 cifre.
 // @match        https://aidaonline7.adm.gov.it/*
 // @grant        none
 // @run-at       document-idle
@@ -15,6 +15,10 @@
     const DATA_KEY = 'TARIC_BUILDER_V1_DATA';
     const MAP_KEY = 'TARIC_BUILDER_V1_MAP';
     const PANEL_ID = 'taric-builder-direct-detail-panel';
+    const UNRESOLVED_WAIT_MS = 5000;
+
+    let unresolvedTimer = null;
+    let unresolvedSignature = '';
 
     const clean = v => String(v || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
     const digits = v => String(v || '').replace(/\D/g, '');
@@ -24,7 +28,7 @@
             const raw = localStorage.getItem(key);
             return raw ? JSON.parse(raw) : fallback;
         } catch (e) {
-            console.error('[TARIC DIRECT DETAIL] read failed', key, e);
+            console.error('[TARIC V1.2] read failed', key, e);
             return fallback;
         }
     }
@@ -40,6 +44,30 @@
     function isDetailPage() {
         const t = bodyText().toLowerCase();
         return t.includes('inizio validità') && t.includes('fine validità');
+    }
+
+    function elementIsVisible(element) {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden' &&
+               element.type !== 'hidden' && element.offsetWidth > 0 && element.offsetHeight > 0;
+    }
+
+    function subchapterInput() {
+        const candidates = [...document.querySelectorAll(
+            'input[name="NomenclatureImport.Codice"], input[id="NomenclatureImport.Codice"]'
+        )];
+        return candidates.find(input =>
+            elementIsVisible(input) && !input.disabled && !input.readOnly &&
+            ['text', 'search', 'tel', 'number'].includes(input.type)
+        ) || null;
+    }
+
+    function isSubchapterFormPage() {
+        if (isDetailPage()) return false;
+        const input = subchapterInput();
+        if (!input) return false;
+        return digits(input.value || '').length <= 4;
     }
 
     function valueAfterLabel(text, label, valuePattern) {
@@ -65,16 +93,6 @@
             const v = clean(textarea.value || textarea.innerText || textarea.textContent);
             if (v) return v;
         }
-
-        const codePos = text.toLowerCase().indexOf('codice:');
-        if (codePos >= 0) {
-            return clean(text.slice(codePos)
-                .replace(/Codice\s*:?\s*[0-9 ]+/i, ' ')
-                .replace(/Inizio validità\s*:?\s*\d{2}\/\d{2}\/\d{4}/i, ' ')
-                .replace(/Fine validità\s*:?\s*\d{2}\/\d{2}\/\d{4}/i, ' ')
-                .replace(/Numero trattini\s*:?\s*\d{1,2}/i, ' ')
-                .replace(/Unit[aà] supplementare\s*:?\s*\S*/i, ' '));
-        }
         return '';
     }
 
@@ -84,7 +102,7 @@
         ) || null;
     }
 
-    function inspect() {
+    function inspectDirectDetail() {
         const state = read(STATE_KEY, {});
         if (!isDetailPage()) return { ok: false, reason: 'non-detail', state };
 
@@ -106,8 +124,44 @@
         return { ok: directState, reason: directState ? 'direct-detail' : 'normal-detail', state, code, sub, text };
     }
 
+    function nextPendingIndex(state, map, startIndex) {
+        let i = startIndex;
+        const list = map.subchapters || [];
+        while (i < list.length && state.completedSubchapters?.[list[i]]) i++;
+        return i;
+    }
+
+    function advanceToNext(state, map, reason) {
+        state.completedSubchapters = state.completedSubchapters || {};
+        const list = map.subchapters || [];
+        const nextIndex = nextPendingIndex(state, map, Number(state.subchapterIndex || 0) + 1);
+
+        if (nextIndex >= list.length) {
+            state.running = false;
+            state.paused = false;
+            state.completedAt = Date.now();
+            state.phase = 'completato';
+            state.nav = '';
+            state.stack = [];
+            state.currentCode = '';
+            state.currentDescription = '';
+            return false;
+        }
+
+        state.subchapterIndex = nextIndex;
+        state.activeSubchapter = list[nextIndex];
+        state.stack = [];
+        state.nav = 'back-to-subchapter-form';
+        state.phase = reason + '; prossimo ' + state.activeSubchapter;
+        state.currentCode = '';
+        state.currentDescription = '';
+        state.running = true;
+        state.paused = false;
+        return true;
+    }
+
     function handleDirectDetail() {
-        const info = inspect();
+        const info = inspectDirectDetail();
         if (!info.ok) {
             alert('Questa pagina non sembra un direct-detail recuperabile. Stato: ' + info.reason + '.');
             return;
@@ -149,60 +203,100 @@
         state.visitedPages = state.visitedPages || {};
         state.visitedPages[sub] = true;
 
-        let nextIndex = Number(state.subchapterIndex || 0) + 1;
-        const list = map.subchapters || [];
-        while (nextIndex < list.length && state.completedSubchapters[list[nextIndex]]) nextIndex++;
+        const hasNext = advanceToNext(state, map, 'direct-detail ' + sub + ' salvato');
+        write(DATA_KEY, data);
+        write(STATE_KEY, state);
+        updatePanel();
 
-        if (nextIndex >= list.length) {
-            state.running = false;
-            state.paused = false;
-            state.completedAt = Date.now();
-            state.phase = 'completato';
-            state.nav = '';
-            state.stack = [];
-            state.currentCode = '';
-            state.currentDescription = '';
-            write(DATA_KEY, data);
-            write(STATE_KEY, state);
+        if (!hasNext) {
             alert('Direct-detail salvato. La coda TARIC risulta completata.');
             location.reload();
             return;
         }
 
-        state.subchapterIndex = nextIndex;
-        state.activeSubchapter = list[nextIndex];
-        state.stack = [];
-        state.nav = 'back-to-subchapter-form';
-        state.phase = 'direct-detail ' + sub + ' salvato; ritorno per ' + state.activeSubchapter;
-        state.currentCode = '';
-        state.currentDescription = '';
-        state.running = true;
-        state.paused = false;
-
-        write(DATA_KEY, data);
-        write(STATE_KEY, state);
-        updatePanel();
-
         const back = findAidaBack();
         if (back) {
             setTimeout(() => back.click(), 250);
         } else {
-            alert('Dettaglio ' + code + ' salvato e checkpoint avanzato a ' + state.activeSubchapter + '. Non trovo Indietro AIDA: torna manualmente alla ricerca e la V1 riprenderà.');
+            alert('Dettaglio ' + code + ' salvato. Checkpoint avanzato a ' + state.activeSubchapter + '. Torna manualmente alla ricerca TARIC.');
         }
+    }
+
+    function markUnresolvedAndContinue() {
+        const state = read(STATE_KEY, {});
+        const map = read(MAP_KEY, { chapters: [], subchapters: [] });
+        const sub = digits(state.activeSubchapter || '');
+
+        if (!/^\d{4}$/.test(sub)) return false;
+        if (state.nav !== 'load-subchapter') return false;
+        if (!state.running || state.paused) return false;
+        if (!isSubchapterFormPage()) return false;
+        if (state.stack?.length) return false;
+
+        state.unresolvedSubchapters = state.unresolvedSubchapters || {};
+        state.unresolvedSubchapters[sub] = {
+            firstSeenAt: state.unresolvedSubchapters[sub]?.firstSeenAt || Date.now(),
+            lastSeenAt: Date.now(),
+            reason: 'nessuna corrispondenza nella ricerca diretta a 4 cifre',
+            retryMode: 'indice'
+        };
+
+        const hasNext = advanceToNext(state, map, 'UNRESOLVED ' + sub + ' accodato per secondo passaggio');
+        write(STATE_KEY, state);
+        updatePanel();
+
+        if (!hasNext) {
+            alert('Prima passata completata. Restano ' + Object.keys(state.unresolvedSubchapters || {}).length + ' sottocapitoli da recuperare via indice.');
+            return true;
+        }
+
+        console.warn('[TARIC V1.2] Sottocapitolo non interrogabile direttamente:', sub, '→ prossimo:', state.activeSubchapter);
+        return true;
+    }
+
+    function watchUnresolved() {
+        const state = read(STATE_KEY, {});
+        const sig = [state.activeSubchapter, state.subchapterIndex, state.nav, state.running, state.paused, location.pathname].join('|');
+
+        const candidate = state.running && !state.paused && state.nav === 'load-subchapter' &&
+            (!state.stack || state.stack.length === 0) && isSubchapterFormPage();
+
+        if (!candidate) {
+            if (unresolvedTimer) clearTimeout(unresolvedTimer);
+            unresolvedTimer = null;
+            unresolvedSignature = '';
+            return;
+        }
+
+        if (unresolvedTimer && unresolvedSignature === sig) return;
+        if (unresolvedTimer) clearTimeout(unresolvedTimer);
+
+        unresolvedSignature = sig;
+        unresolvedTimer = setTimeout(() => {
+            unresolvedTimer = null;
+            const latest = read(STATE_KEY, {});
+            const latestSig = [latest.activeSubchapter, latest.subchapterIndex, latest.nav, latest.running, latest.paused, location.pathname].join('|');
+            if (latestSig !== unresolvedSignature) return;
+            markUnresolvedAndContinue();
+        }, UNRESOLVED_WAIT_MS);
     }
 
     function updatePanel() {
         const panel = document.getElementById(PANEL_ID);
         if (!panel) return;
-        const info = inspect();
-        const state = info.state || {};
+        const info = inspectDirectDetail();
+        const state = read(STATE_KEY, {});
         const data = read(DATA_KEY, { details: {}, tables: {} });
+        const unresolved = Object.keys(state.unresolvedSubchapters || {});
+
         panel.querySelector('.status').innerHTML =
-            '<b>DIRECT DETAIL V1.1</b><br>' +
+            '<b>ROBUSTNESS V1.2</b><br>' +
             'Checkpoint: ' + (state.activeSubchapter || '-') + '<br>' +
-            'Pagina: ' + (isDetailPage() ? (info.code || 'dettaglio') : 'non dettaglio') + '<br>' +
-            'Modalità: ' + (info.ok ? 'DIRECT-DETAIL RILEVATO' : info.reason) + '<br>' +
+            'Pagina: ' + (isDetailPage() ? (info.code || 'dettaglio') : (isSubchapterFormPage() ? 'ricerca 4 cifre' : 'altra pagina')) + '<br>' +
+            'Direct-detail: ' + (info.ok ? 'RILEVATO' : 'no') + '<br>' +
+            'Unresolved: ' + unresolved.length + (unresolved.length ? ' (' + unresolved.slice(-4).join(', ') + ')' : '') + '<br>' +
             'Dettagli salvati: ' + Object.keys(data.details || {}).length;
+
         const btn = panel.querySelector('button');
         btn.disabled = !info.ok;
         btn.style.opacity = info.ok ? '1' : '.45';
@@ -214,7 +308,7 @@
         p.id = PANEL_ID;
         Object.assign(p.style, {
             position: 'fixed', left: '12px', top: '12px', zIndex: 2147483647,
-            width: '260px', padding: '12px', background: '#102737', color: '#fff',
+            width: '275px', padding: '12px', background: '#102737', color: '#fff',
             border: '1px solid #52738a', borderRadius: '8px', font: '13px Arial', boxShadow: '0 2px 10px #0008'
         });
         const status = document.createElement('div');
@@ -236,5 +330,8 @@
         updatePanel();
     });
 
-    setInterval(updatePanel, 1500);
+    setInterval(() => {
+        updatePanel();
+        watchUnresolved();
+    }, 1000);
 })();
